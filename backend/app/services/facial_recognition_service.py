@@ -206,12 +206,12 @@ class FacialRecognitionService:
                     detail="❌ No se detectó rostro en la imagen. Asegúrese de estar mirando a la cámara."
                 )
             
-            # Verificar liveness (evitar fotos con YOLO)
+            # Verificar liveness (evitar fotos/pantallas/dispositivos)
             liveness_check = self._check_liveness(image_data)
             if not liveness_check["is_alive"]:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"❌ Verificación de liveness fallida: {liveness_check['reason']}"
+                    detail=liveness_check['reason']
                 )
             
             # Comparar con imágenes registradas usando face_recognition
@@ -306,12 +306,15 @@ class FacialRecognitionService:
                     detail=f"❌ Error detectando rostro: {str(e)}"
                 )
             
-            # Verificar liveness
+            # Verificar liveness (detección de dispositivos, accesorios, etc.)
             liveness_check = self._check_liveness(image_data)
             if not liveness_check["is_alive"]:
+                # ⚠️ SEGURIDAD CRÍTICA: Rechazar si no pasa validación de liveness
+                security_level = liveness_check.get("security_level", "DESCONOCIDO")
+                print(f"[🚫 SEGURIDAD {security_level}] Liveness check fallido: {liveness_check['reason']}")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"❌ Verificación de liveness fallida: {liveness_check['reason']}"
+                    detail=liveness_check['reason']
                 )
             
             # ✅ VERIFICACIÓN CRÍTICA: Comparar rostro SOLO con el usuario específico
@@ -343,22 +346,49 @@ class FacialRecognitionService:
     
     def _compare_faces(self, image_data: bytes, registered_images: list) -> dict:
         """
-        Compara el rostro actual con los rostros registrados
+        Compara el rostro actual con los rostros registrados del usuario
+        
+        ⚠️ CRÍTICO: Esta función SOLO se llama si:
+        1. El usuario EXISTE
+        2. El usuario TIENE facial recognition habilitado
+        3. El usuario TIENE al menos un rostro registrado (no_images > 0)
         
         Args:
             image_data: Imagen a verificar en bytes
-            registered_images: Lista de rutas de imágenes registradas
+            registered_images: Lista de rutas de imágenes registradas del usuario
             
         Returns:
             Dict con resultado de comparación y confianza
+            - match: True/False
+            - confidence: Porcentaje de similitud
+            - distance: Valor numérico (menor = más similar)
+            - matched_images: Cuántas imágenes registradas coincidieron
         """
         try:
+            # VALIDACIÓN CRÍTICA: Verificar que hay imágenes registradas
+            if not registered_images or len(registered_images) == 0:
+                print("[CRITICAL] VULNERABILIDAD: Se intentó comparar con lista vacía")
+                return {
+                    "match": False,
+                    "confidence": 0,
+                    "distance": 1.0,
+                    "matched_images": 0,
+                    "reason": "No hay imágenes registradas para comparar"
+                }
+            
             # Convertir bytes a imagen
             nparr = np.frombuffer(image_data, np.uint8)
             image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
             if image is None:
-                return {"match": False, "confidence": 0}
+                print("[ERROR] Imagen capturada es inválida")
+                return {
+                    "match": False,
+                    "confidence": 0,
+                    "distance": 1.0,
+                    "matched_images": 0,
+                    "reason": "Imagen inválida"
+                }
             
             # Convertir BGR a RGB para face_recognition
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -367,77 +397,139 @@ class FacialRecognitionService:
             try:
                 current_face_encodings = face_recognition.face_encodings(image_rgb)
                 if not current_face_encodings:
-                    return {"match": False, "confidence": 0}
+                    print("[ERROR] No se pudo extraer encoding del rostro capturado")
+                    return {
+                        "match": False,
+                        "confidence": 0,
+                        "distance": 1.0,
+                        "matched_images": 0,
+                        "reason": "No se pudo extraer características del rostro"
+                    }
                 
                 current_face_encoding = current_face_encodings[0]
             except Exception as e:
-                print(f"[WARN] Error obteniendo encoding del rostro actual: {e}")
-                return {"match": False, "confidence": 0}
+                print(f"[ERROR] Error obteniendo encoding del rostro actual: {e}")
+                return {
+                    "match": False,
+                    "confidence": 0,
+                    "distance": 1.0,
+                    "matched_images": 0,
+                    "reason": f"Error procesando rostro: {str(e)}"
+                }
             
-            # Comparar con cada imagen registrada
+            # COMPARACIÓN ESTRICTA: Comparar con CADA imagen registrada
             best_match = False
             best_distance = 1.0
+            matched_count = 0
+            match_details = []
             
-            for registered_image_path in registered_images:
+            # Threshold para considerar un match: 0.55 (más estricto que 0.6)
+            DISTANCE_THRESHOLD = 0.55
+            CONFIDENCE_MIN = 35  # Confianza mínima requerida (%)
+            
+            print(f"[LOG] Comparando rostro capturado con {len(registered_images)} imágenes registradas")
+            
+            for idx, registered_image_path in enumerate(registered_images):
                 try:
                     # Cargar imagen registrada
                     registered_image = face_recognition.load_image_file(registered_image_path)
                     registered_face_encodings = face_recognition.face_encodings(registered_image)
                     
                     if not registered_face_encodings:
+                        print(f"[WARN] No se pudo extraer encoding de imagen registrada #{idx + 1}")
                         continue
                     
                     registered_face_encoding = registered_face_encodings[0]
                     
-                    # Comparar faces
+                    # Comparar faces usando distancia euclidiana
                     distance = face_recognition.face_distance(
                         [registered_face_encoding],
                         current_face_encoding
                     )[0]
                     
-                    # Threshold: 0.6 es estándar (menor = más similar)
-                    if distance < 0.6:
+                    # Calcular confianza
+                    confidence = max(0, (1 - distance) * 100)
+                    
+                    print(f"[LOG] Imagen #{idx + 1}: distance={distance:.4f}, confidence={confidence:.1f}%")
+                    
+                    match_details.append({
+                        "image": registered_image_path,
+                        "distance": float(distance),
+                        "confidence": float(confidence),
+                        "is_match": distance < DISTANCE_THRESHOLD
+                    })
+                    
+                    # Evaluar si es coincidencia: distancia < threshold
+                    if distance < DISTANCE_THRESHOLD and confidence >= CONFIDENCE_MIN:
                         best_match = True
+                        matched_count += 1
                         best_distance = min(best_distance, distance)
+                        print(f"[✓] COINCIDENCIA ENCONTRADA en imagen #{idx + 1} con confidence {confidence:.1f}%")
                     
                 except Exception as e:
-                    print(f"[WARN] Error procesando imagen registrada {registered_image_path}: {e}")
+                    print(f"[ERROR] Error procesando imagen registrada #{idx + 1}: {e}")
                     continue
             
-            # Convertir distancia a confianza (0-100%)
-            confidence = max(0, (1 - best_distance) * 100)
-            
-            return {
-                "match": best_match,
-                "confidence": confidence,
-                "distance": float(best_distance)
-            }
+            # RESULTADO FINAL: Requerir al menos UNA coincidencia
+            if best_match and matched_count > 0:
+                confidence = max(0, (1 - best_distance) * 100)
+                print(f"[✓✓✓] VERIFICACIÓN EXITOSA: {matched_count}/{len(registered_images)} imágenes coincidieron")
+                return {
+                    "match": True,
+                    "confidence": float(confidence),
+                    "distance": float(best_distance),
+                    "matched_images": matched_count,
+                    "total_images": len(registered_images),
+                    "reason": f"Rostro coincide con {matched_count}/{len(registered_images)} imágenes registradas"
+                }
+            else:
+                print(f"[✗✗✗] VERIFICACIÓN FALLIDA: Ninguna imagen coincidió")
+                return {
+                    "match": False,
+                    "confidence": 0,
+                    "distance": float(best_distance),
+                    "matched_images": 0,
+                    "total_images": len(registered_images),
+                    "reason": f"El rostro no coincide con ninguna de las {len(registered_images)} imágenes registradas",
+                    "details": match_details  # Para debugging
+                }
         
         except Exception as e:
-            print(f"[ERROR] _compare_faces: {str(e)}")
-            return {"match": False, "confidence": 0}
+            print(f"[CRITICAL ERROR] _compare_faces: {str(e)}")
+            return {
+                "match": False,
+                "confidence": 0,
+                "distance": 1.0,
+                "matched_images": 0,
+                "reason": f"Error crítico en comparación: {str(e)}"
+            }
     
     def _check_liveness(self, image_data: bytes) -> dict:
         """
-        Verifica que sea una persona viva (no una foto/pantalla)
+        Verifica que sea una persona viva (no una foto/pantalla/dispositivo)
         
-        Detecciones:
-        - Gafas
-        - Sombreros
-        - Mascaras
+        ⚠️ VALIDACIONES CRÍTICAS:
+        1. Detecta pantallas, monitores, TVs, celulares, tablets
+        2. Detecta si el rostro está siendo mostrado EN un dispositivo
+        3. Rechaza accesorios sospechosos (gafas, sombreros, máscaras)
+        4. Rechaza si hay objetos adicionales cerca del rostro
         
         Args:
             image_data: Imagen a verificar en bytes
             
         Returns:
             Dict con resultado de verificación
+            - is_alive: True/False
+            - reason: Descripción del resultado
+            - devices_detected: Dispositivos encontrados (si los hay)
         """
         try:
             if not self.yolo_model:
                 # Si YOLO no está disponible, permitir de todos modos
                 return {
                     "is_alive": True,
-                    "reason": "YOLO no disponible - liveness check omitido"
+                    "reason": "YOLO no disponible - liveness check omitido",
+                    "devices_detected": []
                 }
             
             # Convertir bytes a imagen
@@ -445,53 +537,201 @@ class FacialRecognitionService:
             image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
             if image is None:
-                return {"is_alive": False, "reason": "Imagen inválida"}
+                return {
+                    "is_alive": False, 
+                    "reason": "❌ Imagen inválida",
+                    "devices_detected": []
+                }
             
-            # Ejecutar YOLO
+            # Ejecutar YOLO para detección de objetos
             results = self.yolo_model(image, verbose=False)
             
             if not results or len(results) == 0:
-                return {"is_alive": True, "reason": "Sin accesorios detectados"}
+                return {
+                    "is_alive": True, 
+                    "reason": "✅ Sin objetos sospechosos detectados",
+                    "devices_detected": []
+                }
             
-            # Clases sospechosas (índices en COCO)
+            # ============================================
+            # CLASES COCO - Mapeo de dispositivos peligrosos
+            # ============================================
+            # Dispositivos donde se podría mostrar un rostro (MÁS PELIGROSO)
+            device_classes = {
+                62: "laptop",        # Pantalla de laptop
+                63: "tv",            # Televisor
+                65: "remote",        # Control remoto (indica pantalla cercana)
+                73: "book",          # Podría ser un libro/papel con foto
+                74: "cell phone",    # Celular/teléfono
+            }
+            
+            # Accesorios que ocultan/alteran el rostro
+            accessory_classes = {
+                0: "person",         # Persona - puede usarse para bloquear vista
+                27: "tie",           # Corbata cerca del rostro
+                28: "cake",          # Objeto frente al rostro
+                29: "couch",         # Indicativo de ambiente controlado
+                30: "potted plant",  # Objeto grande que podría ocluir
+            }
+            
+            # Accesorios PERMITIDOS (lentes, gafas no son problema)
+            allowed_accessories = {
+                37: "glasses",       # ✅ PERMITIDO - Lentes/gafas normales
+                38: "sunglasses",    # ✅ PERMITIDO - Gafas de sol (levemente sospechosas)
+                39: "goggles",       # ✅ PERMITIDO - Gafas de protección
+            }
+            
+            # Objetos sospechosos adicionales
             suspicious_classes = {
-                34: "bottle",    # Botellas pueden usarse para ocultar
-                35: "wine glass", 
-                36: "cup",
-                42: "spoon",
-                43: "bowl",
+                34: "bottle",        # Botellas para ocultar rostro
+                35: "wine glass",    # Cristalería
+                36: "cup",           # Taza/vaso
+                42: "spoon",         # Utensilio
+                43: "bowl",          # Recipiente
+                44: "banana",        # Objeto para ocluir
+                45: "apple",         # Objeto para ocluir
+                47: "sandwich",      # Objeto frente rostro
+                48: "orange",        # Objeto para ocluir
+                50: "pizza",         # Objeto grande
+                51: "donut",         # Objeto frente rostro
+                52: "cake",          # Objeto grande
             }
             
-            dangerous_classes = {
-                26: "backpack",   # Podría indicar que no es una persona real
+            # Máscara facial explícita (muy peligrosa)
+            mask_classes = {
+                0: "mask",           # Máscara (si el modelo la detecta)
             }
             
-            detected_classes = []
+            detected_devices = []
+            detected_accessories = []
+            detected_suspicious = []
+            detected_allowed_accessories = []  # Lentes, gafas (permitidas)
+            device_detections = []  # Para guardar detalles de dispositivos
+            
+            print("[LOG] ========== ANÁLISIS YOLO ==========")
+            
             for result in results:
                 if result.boxes:
                     for box in result.boxes:
                         class_id = int(box.cls[0])
-                        detected_classes.append(class_id)
+                        confidence = float(box.conf[0])
+                        
+                        # Obtener coordenadas del bounding box
+                        x1, y1, x2, y2 = box.xyxy[0]
+                        box_width = float(x2 - x1)
+                        box_height = float(y2 - y1)
+                        box_area = box_width * box_height
+                        
+                        # Imagen total
+                        img_height, img_width = image.shape[:2]
+                        img_area = img_height * img_width
+                        box_percentage = (box_area / img_area) * 100
+                        
+                        # Verificar si son LENTES PERMITIDOS
+                        if class_id in allowed_accessories:
+                            accessory_name = allowed_accessories[class_id]
+                            detected_allowed_accessories.append(accessory_name)
+                            print(f"[✅ PERMITIDO] {accessory_name.upper()} detectado - Aceptado")
+                        
+                        # Verificar si es un DISPOSITIVO (critial)
+                        elif class_id in device_classes:
+                            device_name = device_classes[class_id]
+                            detected_devices.append(device_name)
+                            device_detections.append({
+                                "type": device_name,
+                                "confidence": float(confidence),
+                                "size_percentage": round(box_percentage, 2),
+                                "position": {
+                                    "x1": float(x1), "y1": float(y1),
+                                    "x2": float(x2), "y2": float(y2)
+                                }
+                            })
+                            print(f"[⚠️ DEVICE] {device_name.upper()} detectado con {confidence:.2%} confianza (ocupa {box_percentage:.1f}% de la imagen)")
+                        
+                        # Verificar accesorios
+                        elif class_id in accessory_classes:
+                            accessory_name = accessory_classes[class_id]
+                            detected_accessories.append(accessory_name)
+                            print(f"[⚠️ ACCESORIO] {accessory_name} detectado")
+                        
+                        # Verificar objetos sospechosos
+                        elif class_id in suspicious_classes:
+                            suspicious_name = suspicious_classes[class_id]
+                            detected_suspicious.append(suspicious_name)
+                            print(f"[⚠️ SOSPECHOSO] {suspicious_name} detectado")
             
-            # Si se detectan clases sospechosas, sospechar
-            if detected_classes:
-                print(f"[LOG] YOLO detectó clases: {detected_classes}")
+            print("[LOG] ====================================")
+            
+            # ============================================
+            # LÓGICA DE DECISIÓN - RECHAZO ESTRICTO
+            # ============================================
+            
+            # 🚫 RECHAZAR SI: Se detecta dispositivo (pantalla, TV, teléfono, tablet)
+            if detected_devices:
+                devices_str = ", ".join(detected_devices)
+                print(f"[❌ RECHAZO] Se detectó dispositivo de video: {devices_str}")
                 return {
-                    "is_alive": True,  # Aún permitir, pero registrar
-                    "reason": f"Objetos detectados: {detected_classes}"
+                    "is_alive": False,
+                    "reason": f"❌ VERIFICACIÓN FALLIDA: Se detectó un dispositivo de pantalla ({devices_str}). El rostro debe presentarse directamente, no a través de una pantalla, teléfono, tablet o monitor.",
+                    "devices_detected": device_detections,
+                    "security_level": "CRÍTICO"
                 }
             
+            # 🚫 RECHAZAR SI: Hay múltiples accesorios sospechosos (NO incluye lentes)
+            if len(detected_accessories) >= 2:
+                accessories_str = ", ".join(detected_accessories)
+                print(f"[❌ RECHAZO] Múltiples accesorios detectados: {accessories_str}")
+                return {
+                    "is_alive": False,
+                    "reason": f"❌ VERIFICACIÓN FALLIDA: Demasiados accesorios/objetos detectados ({accessories_str}). Presente su rostro sin accesorios adicionales.",
+                    "devices_detected": [],
+                    "security_level": "ALTO"
+                }
+            
+            # ✅ PERMITIR SI: Solo hay lentes/gafas (sin otros accesorios)
+            if detected_allowed_accessories and not detected_accessories and not detected_suspicious:
+                glasses_str = ", ".join(detected_allowed_accessories)
+                print(f"[✅ PERMITIDO] Rostro con lentes/gafas: {glasses_str}")
+                return {
+                    "is_alive": True,
+                    "reason": f"✅ Verificación de liveness exitosa. Rostro con {glasses_str} aceptado.",
+                    "devices_detected": [],
+                    "security_level": "BAJO",
+                    "note": f"Usuario lleva {glasses_str}"
+                }
+            
+            # ⚠️ ADVERTENCIA SI: Hay objetos sospechosos O lentes + otros objetos
+            if detected_suspicious or detected_accessories:
+                warnings = detected_suspicious + detected_accessories
+                # Si hay lentes pero también otros objetos
+                if detected_allowed_accessories:
+                    warnings.extend(detected_allowed_accessories)
+                warnings_str = ", ".join(warnings)
+                print(f"[⚠️ ADVERTENCIA] Objetos detectados: {warnings_str}")
+                return {
+                    "is_alive": True,  # Permitir, pero registrar
+                    "reason": f"⚠️ ADVERTENCIA: Se detectaron objetos ({warnings_str}). Imagen aceptada pero verificada con objetos presentes.",
+                    "devices_detected": [],
+                    "security_level": "MEDIO",
+                    "warnings": warnings
+                }
+            
+            # ✅ ACEPTAR: Todo está bien
             return {
                 "is_alive": True,
-                "reason": "Verificación de liveness exitosa"
+                "reason": "✅ Verificación de liveness exitosa. Rostro válido detectado.",
+                "devices_detected": [],
+                "security_level": "BAJO"
             }
         
         except Exception as e:
-            print(f"[WARN] Error en _check_liveness: {e}")
-            # En caso de error, permitir de todos modos
+            print(f"[ERROR] Error en _check_liveness: {e}")
+            # En caso de error, RECHAZAR por seguridad
             return {
-                "is_alive": True,
-                "reason": f"Error en liveness check: {str(e)}"
+                "is_alive": False,
+                "reason": f"❌ Error en verificación de liveness: {str(e)}",
+                "devices_detected": [],
+                "security_level": "ERROR"
             }
     
     def check_facial_uniqueness(self, image_data: bytes, exclude_user_id: str = None) -> dict:

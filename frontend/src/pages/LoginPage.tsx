@@ -123,10 +123,28 @@ const LoginPage = () => {
       const data = await response.json();
 
       if (!response.ok) {
-        // Manejo detallado de errores
+        // Manejo detallado de errores - Verificación de existencia de rostro en BD
         if (response.status === 401) {
-          // Cualquier error 401 significa que el rostro NO pertenece al usuario
-          throw new Error("❌ " + (data.detail || "El rostro no pertenece a este usuario. Acceso denegado."));
+          // Error 401: El rostro NO existe en BD o NO pertenece al usuario
+          const errorDetail = data.detail || "";
+          
+          // Casos específicos de error 401:
+          if (errorDetail.includes("No hay rostro registrado")) {
+            // El usuario NO tiene rostro en la base de datos
+            throw new Error("❌ No tienes un rostro registrado en la base de datos. Por favor, registra primero tu información facial en tu perfil.");
+          } else if (errorDetail.includes("rostro no pertenece")) {
+            // El rostro capturado no coincide con el del usuario
+            throw new Error("❌ El rostro no pertenece a este usuario. Acceso denegado.");
+          } else if (errorDetail.includes("Usuario no encontrado")) {
+            // El usuario no existe
+            throw new Error("❌ Usuario no encontrado en el sistema.");
+          } else if (errorDetail.includes("Verificación de liveness")) {
+            // Falló la verificación de liveness (foto estática)
+            throw new Error("❌ Se detectó una foto o imagen estática. Por favor, realiza la captura en vivo.");
+          } else {
+            // Error genérico 401
+            throw new Error("❌ " + errorDetail);
+          }
         } else if (response.status === 400) {
           throw new Error("❌ " + (data.detail || "Error en la detección del rostro. Por favor, asegúrate de estar mirando la cámara."));
         } else if (response.status === 403) {
