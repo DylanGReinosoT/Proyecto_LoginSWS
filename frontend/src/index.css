@@ -1,0 +1,159 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 220 20% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 10%;
+
+    --primary: 10 78% 54%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 20% 10%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 10% 50%;
+
+    --accent: 10 78% 54%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 14% 90%;
+    --input: 220 14% 90%;
+    --ring: 10 78% 54%;
+
+    --radius: 1rem;
+
+    /* Custom colors */
+    --coral: 10 78% 54%;
+    --coral-light: 10 78% 64%;
+    --coral-dark: 10 78% 44%;
+    --dark-bg: 220 30% 8%;
+    --dark-surface: 220 25% 12%;
+    --star-color: 45 100% 72%;
+  }
+
+  .dark {
+    --background: 220 30% 8%;
+    --foreground: 0 0% 98%;
+
+    --card: 220 25% 12%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 220 25% 12%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 10 78% 54%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 20% 18%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 220 20% 18%;
+    --muted-foreground: 220 10% 60%;
+
+    --accent: 10 78% 54%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62.8% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 20% 20%;
+    --input: 220 20% 20%;
+    --ring: 10 78% 54%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-size: 13px;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', serif;
+  }
+}
+
+@layer utilities {
+  /* Staggered animation delays */
+  .animation-delay-100 {
+    animation-delay: 100ms;
+  }
+  .animation-delay-200 {
+    animation-delay: 200ms;
+  }
+  .animation-delay-300 {
+    animation-delay: 300ms;
+  }
+  .animation-delay-400 {
+    animation-delay: 400ms;
+  }
+  .animation-delay-500 {
+    animation-delay: 500ms;
+  }
+  .animation-delay-600 {
+    animation-delay: 600ms;
+  }
+  .animation-delay-700 {
+    animation-delay: 700ms;
+  }
+  .animation-delay-800 {
+    animation-delay: 800ms;
+  }
+
+  /* Fill mode for animations */
+  .animation-fill-forwards {
+    animation-fill-mode: forwards;
+  }
+  .animation-fill-both {
+    animation-fill-mode: both;
+  }
+}
+
+@layer components {
+  /* Glow effect for buttons */
+  .glow-coral {
+    box-shadow: 0 0 30px hsl(var(--coral) / 0.4), 0 0 60px hsl(var(--coral) / 0.2);
+  }
+
+  /* Floating particles */
+  .particle {
+    position: absolute;
+    border-radius: 50%;
+    background: hsl(var(--star-color));
+    animation: float 6s ease-in-out infinite;
+  }
+
+  /* Glass effect */
+  .glass {
+    background: hsl(0 0% 100% / 0.05);
+    backdrop-filter: blur(10px);
+    border: 1px solid hsl(0 0% 100% / 0.15);
+  }
+
+  /* Input focus glow */
+  .input-glow:focus-within {
+    box-shadow: 0 0 0 3px hsl(var(--coral) / 0.15);
+  }
+}
